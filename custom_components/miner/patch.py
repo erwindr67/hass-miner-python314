@@ -1,0 +1,81 @@
+"""Package installation helper for hass-miner."""
+from __future__ import annotations
+
+import os
+import site
+import sys
+from subprocess import PIPE
+from subprocess import Popen
+
+from homeassistant.util.package import _LOGGER
+from homeassistant.util.package import is_virtual_env
+
+_UV_ENV_PYTHON_VARS = (
+    "UV_SYSTEM_PYTHON",
+    "UV_PYTHON",
+)
+
+
+def install_package(
+    package: str,
+    upgrade: bool = True,
+    target: str | None = None,
+    constraints: str | None = None,
+    timeout: int | None = None,
+    force_reinstall: bool = False,
+) -> bool:
+    """Install a package on PyPi. Accepts pip compatible package strings.
+
+    Return boolean if install successful.
+    """
+    _LOGGER.info("Attempting install of %s", package)
+    env = os.environ.copy()
+    args = [
+        sys.executable,
+        "-m",
+        "uv",
+        "pip",
+        "install",
+        "--quiet",
+        package,
+        "--prerelease=allow",
+        "--index-strategy",
+        "unsafe-first-match",
+    ]
+    if timeout:
+        env["HTTP_TIMEOUT"] = str(timeout)
+    if upgrade:
+        args.append("--upgrade")
+    if force_reinstall:
+        args.append("--reinstall")
+    if constraints is not None:
+        args += ["--constraint", constraints]
+    if target:
+        abs_target = os.path.abspath(target)
+        args += ["--target", abs_target]
+    elif (
+        not is_virtual_env()
+        and not (any(var in env for var in _UV_ENV_PYTHON_VARS))
+        and (abs_target := site.getusersitepackages())
+    ):
+        args += ["--python", sys.executable, "--target", abs_target]
+
+    _LOGGER.debug("Running uv pip command: args=%s", args)
+    with Popen(
+        args,
+        stdin=PIPE,
+        stdout=PIPE,
+        stderr=PIPE,
+        env=env,
+        close_fds=False,
+    ) as process:
+        _, stderr = process.communicate()
+        if process.returncode != 0:
+            _LOGGER.error(
+                "Unable to install package %s: %s",
+                package,
+                stderr.decode("utf-8").lstrip().strip(),
+            )
+            return False
+
+    return True
